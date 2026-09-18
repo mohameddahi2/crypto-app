@@ -3,10 +3,8 @@ import pandas as pd
 from binance.client import Client
 import plotly.express as px
 import requests
-import time
 
 st.set_page_config(page_title="Binance Spot Momentum", layout="wide", page_icon="⚡")
-
 st.title("⚡ ماسح زخم السيولة الحقيقية (Volume Delta) - Binance Spot")
 
 STABLECOINS = {
@@ -14,7 +12,19 @@ STABLECOINS = {
     "AEUR", "EURI", "USDS", "WBTC", "WEETH", "USDE"
 }
 
-client = Client()
+# حل مشكلة الحظر الجغرافي للسيرفرات الأمريكية بطلب البيانات المباشرة
+@st.cache_resource
+def init_binance_client():
+    try:
+        # المحاولة الأولى باستخدام TLD vision
+        return Client(tld='vision')
+    except Exception:
+        # المحاولة الثانية بدون ping أولي
+        c = Client()
+        c.API_URL = 'https://api1.binance.com/api'
+        return c
+
+client = init_binance_client()
 
 def send_telegram_msg(token, chat_id, message):
     if not token or not chat_id:
@@ -43,7 +53,14 @@ def get_all_spot_symbols():
                     symbols.append(s['symbol'])
         return symbols
     except Exception:
-        return []
+        # حل بديل مباشر عبر API المباشر في حال تعذر المكتبة
+        res = requests.get("https://api.binance.com/api/v3/exchangeInfo").json()
+        symbols = []
+        for s in res['symbols']:
+            if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING' and s['isSpotTradingAllowed']:
+                if s['baseAsset'] not in STABLECOINS:
+                    symbols.append(s['symbol'])
+        return symbols
 
 fast_timeframes = {
     "1m":  {"interval": Client.KLINE_INTERVAL_1MINUTE,  "limit": 30},
