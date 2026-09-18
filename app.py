@@ -11,7 +11,10 @@ STABLECOINS = {
     "AEUR", "EURI", "USDS", "WBTC", "WEETH", "USDE"
 }
 
-BASE_URL = "https://api.binance.com/api/v3"
+# استخدام متصفح وهمي لتجاوز حظر Requests من بينانس
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 def send_telegram_msg(token, chat_id, message):
     if not token or not chat_id:
@@ -31,16 +34,27 @@ def send_telegram_msg(token, chat_id, message):
 
 @st.cache_data(ttl=3600)
 def get_all_spot_symbols():
-    try:
-        res = requests.get(f"{BASE_URL}/exchangeInfo", timeout=10).json()
-        symbols = []
-        for s in res['symbols']:
-            if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING' and s['isSpotTradingAllowed']:
-                if s['baseAsset'] not in STABLECOINS:
-                    symbols.append(s['symbol'])
-        return symbols
-    except Exception:
-        return []
+    endpoints = [
+        "https://api.binance.com/api/v3/exchangeInfo",
+        "https://api1.binance.com/api/v3/exchangeInfo",
+        "https://api3.binance.com/api/v3/exchangeInfo"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                symbols = []
+                for s in data.get('symbols', []):
+                    if s.get('quoteAsset') == 'USDT' and s.get('status') == 'TRADING':
+                        base = s.get('baseAsset')
+                        if base not in STABLECOINS:
+                            symbols.append(s['symbol'])
+                if len(symbols) > 0:
+                    return symbols
+        except Exception:
+            continue
+    return []
 
 fast_timeframes = {
     "1m":  {"interval": "1m",  "limit": 30},
@@ -49,12 +63,18 @@ fast_timeframes = {
 }
 
 def fetch_klines(symbol, interval, limit):
-    try:
-        url = f"{BASE_URL}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        res = requests.get(url, timeout=5).json()
-        return res
-    except Exception:
-        return []
+    endpoints = [
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=5)
+            if res.status_code == 200:
+                return res.json()
+        except Exception:
+            continue
+    return []
 
 @st.cache_data(ttl=30)
 def run_full_spot_screener(symbols_list, min_volume_filter):
