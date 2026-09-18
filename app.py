@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from binance.client import Client
 import plotly.express as px
 import requests
 
@@ -12,19 +11,7 @@ STABLECOINS = {
     "AEUR", "EURI", "USDS", "WBTC", "WEETH", "USDE"
 }
 
-# حل مشكلة الحظر الجغرافي للسيرفرات الأمريكية بطلب البيانات المباشرة
-@st.cache_resource
-def init_binance_client():
-    try:
-        # المحاولة الأولى باستخدام TLD vision
-        return Client(tld='vision')
-    except Exception:
-        # المحاولة الثانية بدون ping أولي
-        c = Client()
-        c.API_URL = 'https://api1.binance.com/api'
-        return c
-
-client = init_binance_client()
+BASE_URL = "https://api.binance.com/api/v3"
 
 def send_telegram_msg(token, chat_id, message):
     if not token or not chat_id:
@@ -45,28 +32,29 @@ def send_telegram_msg(token, chat_id, message):
 @st.cache_data(ttl=3600)
 def get_all_spot_symbols():
     try:
-        info = client.get_exchange_info()
-        symbols = []
-        for s in info['symbols']:
-            if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING' and s['isSpotTradingAllowed']:
-                if s['baseAsset'] not in STABLECOINS:
-                    symbols.append(s['symbol'])
-        return symbols
-    except Exception:
-        # حل بديل مباشر عبر API المباشر في حال تعذر المكتبة
-        res = requests.get("https://api.binance.com/api/v3/exchangeInfo").json()
+        res = requests.get(f"{BASE_URL}/exchangeInfo", timeout=10).json()
         symbols = []
         for s in res['symbols']:
             if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING' and s['isSpotTradingAllowed']:
                 if s['baseAsset'] not in STABLECOINS:
                     symbols.append(s['symbol'])
         return symbols
+    except Exception:
+        return []
 
 fast_timeframes = {
-    "1m":  {"interval": Client.KLINE_INTERVAL_1MINUTE,  "limit": 30},
-    "5m":  {"interval": Client.KLINE_INTERVAL_5MINUTE,  "limit": 24},
-    "15m": {"interval": Client.KLINE_INTERVAL_15MINUTE, "limit": 20}
+    "1m":  {"interval": "1m",  "limit": 30},
+    "5m":  {"interval": "5m",  "limit": 24},
+    "15m": {"interval": "15m", "limit": 20}
 }
+
+def fetch_klines(symbol, interval, limit):
+    try:
+        url = f"{BASE_URL}/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res = requests.get(url, timeout=5).json()
+        return res
+    except Exception:
+        return []
 
 @st.cache_data(ttl=30)
 def run_full_spot_screener(symbols_list, min_volume_filter):
@@ -74,7 +62,10 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
 
     for symbol in symbols_list:
         try:
-            klines_1m = client.get_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1MINUTE, limit=30)
+            klines_1m = fetch_klines(symbol, "1m", 30)
+            if not klines_1m or len(klines_1m) < 2:
+                continue
+
             q_vol_1m = [float(k[7]) for k in klines_1m]
             if sum(q_vol_1m) < min_volume_filter:
                 continue
@@ -83,7 +74,9 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
             current_price = float(klines_1m[-1][4])
 
             for tf_name, tf_params in fast_timeframes.items():
-                klines = klines_1m if tf_name == "1m" else client.get_klines(symbol=symbol, interval=tf_params["interval"], limit=tf_params["limit"])
+                klines = klines_1m if tf_name == "1m" else fetch_klines(symbol, tf_params["interval"], tf_params["limit"])
+                if not klines:
+                    continue
                 quote_volumes = [float(k[7]) for k in klines]
                 curr_q_vol = quote_volumes[-1]
                 avg_q_vol = sum(quote_volumes[:-1]) / len(quote_volumes[:-1]) if len(quote_volumes) > 1 else 1.0
@@ -95,8 +88,11 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
                 buy_vol_quote = float(klines[-1][10])
                 deltas[tf_name] = buy_vol_quote - (curr_q_vol - buy_vol_quote)
 
+            if "1m" not in deltas or "5m" not in deltas:
+                continue
+
             is_bullish = deltas["1m"] > 0 and deltas["5m"] > 0
-            raw_score = (ratios["1m"] * 0.5) + (ratios["5m"] * 0.3) + (ratios["15m"] * 0.2)
+            raw_score = (ratios.get("1m", 1) * 0.5) + (ratios.get("5m", 1) * 0.3) + (ratios.get("15m", 1) * 0.2)
             momentum_score = raw_score * 1.5 if is_bullish else raw_score * 0.2
 
             screener_data.append({
