@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
-from streamlit_autorun import autorun
+import time
 
 st.set_page_config(page_title="Binance Spot Multi-TF Momentum", layout="wide", page_icon="⚡")
 st.title("⚡ ماسح الزخم والسيولة الحقيقية (تحديث تلقائي مستمر)")
@@ -23,14 +23,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# --- إعدادات التحديث التلقائي ---
+# --- إعدادات التحديث التلقائي المدمجة ---
 st.sidebar.header("⏱️ التحديث المستمر")
 auto_refresh = st.sidebar.checkbox("تفعيل التحديث التلقائي", value=True)
 refresh_interval = st.sidebar.slider("معدل التحديث (بالثواني)", min_value=10, max_value=120, value=30, step=5)
-
-if auto_refresh:
-    # إعادة تشغيل الصفحة تلقائياً كل X ثانية
-    autorun(interval=refresh_interval * 1000)
 
 def fetch_binance_data(endpoint):
     for base in BASE_URLS:
@@ -74,7 +70,6 @@ fast_timeframes = {
     "15m": {"interval": "15m", "limit": 8}
 }
 
-# تم إيقاف الكاش لتحديث البيانات لحظياً في كل دورة
 def run_full_spot_screener(symbols_list, min_volume_filter):
     screener_data = []
 
@@ -147,3 +142,8 @@ if not df_screener.empty:
     st.dataframe(bullish_df.head(15), column_config={"رابط الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح")}, hide_index=True, use_container_width=True)
 else:
     st.info("جاري التحديث وجلب البيانات...")
+
+# آلية التحديث التلقائي المستمر المضمونة
+if auto_refresh:
+    time.sleep(refresh_interval)
+    st.rerun()
