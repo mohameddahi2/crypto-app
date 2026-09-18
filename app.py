@@ -4,8 +4,27 @@ import plotly.express as px
 import requests
 import time
 
-st.set_page_config(page_title="Binance Spot Multi-TF Momentum", layout="wide", page_icon="⚡")
-st.title("⚡ ماسح الزخم والسيولة الحقيقية (تحديث تلقائي مستمر)")
+# إعدادات الصفحة والتصميم
+st.set_page_config(
+    page_title="Binance Spot Momentum Terminal",
+    layout="wide",
+    page_icon="⚡",
+    initial_sidebar_state="expanded"
+)
+
+# إضافة CSS مخصص لتحسين مظهر الواجهة
+st.markdown("""
+<style>
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #1e222d; padding: 15px; border-radius: 10px; border: 1px solid #2a2e39; }
+    div[data-testid="stSidebarNav"] { background-color: #131722; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { background-color: #1e222d; border-radius: 6px; padding: 8px 16px; color: #d1d4dc; }
+    .stTabs [aria-selected="true"] { background-color: #2962ff !important; color: white !important; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("⚡ منصة رصد الزخم والسيولة - Binance Spot")
 
 STABLECOINS = {
     "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "GBP", 
@@ -23,10 +42,16 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# --- إعدادات التحديث التلقائي المدمجة ---
-st.sidebar.header("⏱️ التحديث المستمر")
+# --- الشريط الجانبي ---
+st.sidebar.header("⚙️ إعدادات الماسح")
 auto_refresh = st.sidebar.checkbox("تفعيل التحديث التلقائي", value=True)
-refresh_interval = st.sidebar.slider("معدل التحديث (بالثواني)", min_value=10, max_value=120, value=30, step=5)
+refresh_interval = st.sidebar.slider("معدل التحديث (ثواني)", min_value=10, max_value=120, value=30, step=5)
+min_vol = st.sidebar.number_input("حد أدنى لسيولة 24h ($)", value=1000000, step=500000)
+
+st.sidebar.markdown("---")
+st.sidebar.header("💬 إعدادات التليجرام")
+bot_token = st.sidebar.text_input("Bot Token", type="password")
+chat_id = st.sidebar.text_input("Chat ID")
 
 def fetch_binance_data(endpoint):
     for base in BASE_URLS:
@@ -109,17 +134,17 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
             momentum_score = raw_score * (1.5 if is_bullish else 0.3)
 
             screener_data.append({
-                "رابط الشارت": f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}",
-                "العملة": symbol,
+                "الرمز": symbol,
                 "الزخم المركب": round(momentum_score, 2),
-                "السيولة": "🟢 شراء حقيقي" if is_bullish else "🔴 بيع/تصريف",
+                "الحالة": "🟢 شراء" if is_bullish else "🔴 بيع",
                 "Delta 1m ($)": round(deltas["1m"], 2),
                 "Delta 5m ($)": round(deltas["5m"], 2),
                 "Delta 15m ($)": round(deltas["15m"], 2),
                 "زخم 1m": f"{round(ratios['1m'], 1)}x",
                 "زخم 5m": f"{round(ratios['5m'], 1)}x",
                 "زخم 15m": f"{round(ratios['15m'], 1)}x",
-                "السعر": current_price
+                "السعر": current_price,
+                "الشارت": f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}"
             })
         except Exception:
             continue
@@ -127,23 +152,70 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
     df = pd.DataFrame(screener_data)
     return df.sort_values(by="الزخم المركب", ascending=False) if not df.empty else df
 
-st.sidebar.header("⚙️ باقي الإعدادات")
 all_symbols = get_all_spot_symbols()
-
-bot_token = st.sidebar.text_input("Bot Token", type="password")
-chat_id = st.sidebar.text_input("Chat ID")
-min_vol = st.sidebar.number_input("حد أدنى لسيولة 24 ساعة ($)", value=1000000, step=500000)
-
 df_screener = run_full_spot_screener(all_symbols, min_vol)
 
 if not df_screener.empty:
-    bullish_df = df_screener[df_screener["السيولة"] == "🟢 شراء حقيقي"]
-    st.subheader("🔥 العملات المرتفعة الآن (تحديث حي)")
-    st.dataframe(bullish_df.head(15), column_config={"رابط الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح")}, hide_index=True, use_container_width=True)
-else:
-    st.info("جاري التحديث وجلب البيانات...")
+    bullish_df = df_screener[df_screener["الحالة"] == "🟢 شراء"]
+    
+    # 1. كروت المؤشرات العلوية (KPI Metrics)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("إجمالي العملات المفحوصة", len(df_screener))
+    col2.metric("فرص الشراء الحالية", len(bullish_df))
+    
+    top_coin = bullish_df.iloc[0]["الرمز"] if not bullish_df.empty else "N/A"
+    top_score = bullish_df.iloc[0]["الزخم المركب"] if not bullish_df.empty else 0
+    col3.metric("أعلى عملة زخماً", top_coin, f"{top_score}x")
+    col4.metric("حالة النظام", "نشط ⚡", f"تحديث كل {refresh_interval}s")
 
-# آلية التحديث التلقائي المستمر المضمونة
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 2. التبويبات المنسقة
+    tab1, tab2, tab3 = st.tabs(["🔥 أقوى الفرص (Live Terminal)", "📊 الرسم البياني للزخم", "📋 الجدول الكامل"])
+
+    with tab1:
+        if not bullish_df.empty:
+            top_15 = bullish_df.head(15)
+            
+            if st.button("📲 إرسال Top 5 لـ Telegram"):
+                top_5 = top_15.head(5)
+                msg = "🚀 *أعلى 5 عملات بها زخم شراء حقيقي*\n\n"
+                for _, r in top_5.iterrows():
+                    msg += f"• *{r['الرمز']}* | زخم: `{r['الزخم المركب']}x` | Delta 5m: `${r['Delta 5m ($)']}` | [📈 فتح الشارت]({r['الشارت']})\n"
+                send_telegram_msg(bot_token, chat_id, msg)
+
+            st.dataframe(
+                top_15,
+                column_config={
+                    "الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 Opening Chart"),
+                    "الزخم المركب": st.column_config.ProgressColumn("مؤشر الزخم", format="%.2f", min_value=0, max_value=float(df_screener["الزخم المركب"].max())),
+                    "Delta 5m ($)": st.column_config.NumberColumn("Delta 5m", format="$%.2f")
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.info("لا توجد عملات بزخم إيجابي حالياً.")
+
+    with tab2:
+        if not bullish_df.empty:
+            fig = px.bar(
+                bullish_df.head(15), 
+                x="الرمز", 
+                y="الزخم المركب", 
+                color="Delta 5m ($)",
+                color_continuous_scale="G10",
+                title="مقارنة الزخم للعملات الأعلى إيجابية"
+            )
+            fig.update_layout(template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab3:
+        st.dataframe(df_screener, hide_index=True, use_container_width=True)
+
+else:
+    st.info("جاري الاتصال والتحليل...")
+
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
