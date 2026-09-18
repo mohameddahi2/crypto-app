@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
+from streamlit_autorun import autorun
 
 st.set_page_config(page_title="Binance Spot Multi-TF Momentum", layout="wide", page_icon="⚡")
-st.title("⚡ ماسح الزخم والسيولة الحقيقية (1m / 5m / 15m) - Binance Spot")
+st.title("⚡ ماسح الزخم والسيولة الحقيقية (تحديث تلقائي مستمر)")
 
 STABLECOINS = {
     "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "GBP", 
@@ -22,6 +23,15 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# --- إعدادات التحديث التلقائي ---
+st.sidebar.header("⏱️ التحديث المستمر")
+auto_refresh = st.sidebar.checkbox("تفعيل التحديث التلقائي", value=True)
+refresh_interval = st.sidebar.slider("معدل التحديث (بالثواني)", min_value=10, max_value=120, value=30, step=5)
+
+if auto_refresh:
+    # إعادة تشغيل الصفحة تلقائياً كل X ثانية
+    autorun(interval=refresh_interval * 1000)
+
 def fetch_binance_data(endpoint):
     for base in BASE_URLS:
         try:
@@ -35,17 +45,12 @@ def fetch_binance_data(endpoint):
 
 def send_telegram_msg(token, chat_id, message):
     if not token or not chat_id:
-        return False, "يرجى إدخال Bot Token و Chat ID في الشريط الجانبي."
+        return False, "يرجى إدخال البيانات"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         res = requests.post(url, json=payload, timeout=5)
-        return (True, "تم الإرسال بنجاح!") if res.status_code == 200 else (False, res.text)
+        return (True, "تم الإرسال!") if res.status_code == 200 else (False, res.text)
     except Exception as e:
         return False, str(e)
 
@@ -69,7 +74,7 @@ fast_timeframes = {
     "15m": {"interval": "15m", "limit": 8}
 }
 
-@st.cache_data(ttl=30)
+# تم إيقاف الكاش لتحديث البيانات لحظياً في كل دورة
 def run_full_spot_screener(symbols_list, min_volume_filter):
     screener_data = []
 
@@ -83,7 +88,7 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
 
     for symbol in sorted_symbols:
         try:
-            ratios, deltas, volumes = {}, {}, {}
+            ratios, deltas = {}, {}
             current_price = 0.0
 
             for tf_name, tf_params in fast_timeframes.items():
@@ -95,9 +100,7 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
                 curr_q_vol = quote_volumes[-1]
                 avg_q_vol = sum(quote_volumes[:-1]) / len(quote_volumes[:-1]) if len(quote_volumes) > 1 else 1.0
 
-                vol_ratio = (curr_q_vol / avg_q_vol) if avg_q_vol > 0 else 1.0
-                ratios[tf_name] = vol_ratio
-                volumes[tf_name] = curr_q_vol
+                ratios[tf_name] = (curr_q_vol / avg_q_vol) if avg_q_vol > 0 else 1.0
 
                 buy_vol_quote = float(klines[-1][10])
                 deltas[tf_name] = buy_vol_quote - (curr_q_vol - buy_vol_quote)
@@ -106,10 +109,7 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
             if "1m" not in deltas or "5m" not in deltas or "15m" not in deltas:
                 continue
 
-            # شرط الشراء الحقيقي: Delta موجب على 1m و 5m
             is_bullish = deltas["1m"] > 0 and deltas["5m"] > 0
-            
-            # معادلة الزخم المركبة (وزن 50% للدقيقة، 30% لـ 5 دقائق، 20% لـ 15 دقيقة)
             raw_score = (ratios["1m"] * 0.5) + (ratios["5m"] * 0.3) + (ratios["15m"] * 0.2)
             momentum_score = raw_score * (1.5 if is_bullish else 0.3)
 
@@ -132,44 +132,18 @@ def run_full_spot_screener(symbols_list, min_volume_filter):
     df = pd.DataFrame(screener_data)
     return df.sort_values(by="الزخم المركب", ascending=False) if not df.empty else df
 
-st.sidebar.header("⚙️ الإعدادات والتنبيهات")
+st.sidebar.header("⚙️ باقي الإعدادات")
 all_symbols = get_all_spot_symbols()
-
-if all_symbols:
-    st.sidebar.success(f"تم تحميل {len(all_symbols)} عملة سبوت")
-else:
-    st.sidebar.error("جاري الاتصال بسيرفرات بينانس...")
 
 bot_token = st.sidebar.text_input("Bot Token", type="password")
 chat_id = st.sidebar.text_input("Chat ID")
 min_vol = st.sidebar.number_input("حد أدنى لسيولة 24 ساعة ($)", value=1000000, step=500000)
 
-if st.sidebar.button("🔄 تحديث البيانات"):
-    st.cache_data.clear()
-
 df_screener = run_full_spot_screener(all_symbols, min_vol)
 
-tab1, tab2 = st.tabs(["🔥 أعلى العملات زخماً (Multi-TF)", "📊 تفاصيل كل الفريمات"])
-
-with tab1:
-    if not df_screener.empty:
-        bullish_df = df_screener[df_screener["السيولة"] == "🟢 شراء حقيقي"]
-        if not bullish_df.empty:
-            top_20 = bullish_df.head(20)
-            if st.button("📲 إرسال Top 5 لـ Telegram"):
-                top_5 = top_20.head(5)
-                msg = "🚀 *أعلى 5 عملات بها زخم شراء حقيقي (1m / 5m / 15m)*\n\n"
-                for _, r in top_5.iterrows():
-                    msg += f"• *{r['العملة']}* | زخم: `{r['الزخم المركب']}x` | Delta 5m: `${r['Delta 5m ($)']}` | [📈 الشارت]({r['رابط الشارت']})\n"
-                send_telegram_msg(bot_token, chat_id, msg)
-
-            st.plotly_chart(px.bar(top_20, x="العملة", y="الزخم المركب", color="Delta 5m ($)", title="أعلى العملات زخماً بحسب Delta 5m"), use_container_width=True)
-            st.dataframe(top_20, column_config={"رابط الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح")}, hide_index=True, use_container_width=True)
-        else:
-            st.info("لا توجد عملات بـ Delta موجب على 1m و 5m حالياً.")
-    else:
-        st.warning("اضغط على '🔄 تحديث البيانات' لجلب الجدول.")
-
-with tab2:
-    if not df_screener.empty:
-        st.dataframe(df_screener, column_config={"رابط الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح")}, hide_index=True, use_container_width=True)
+if not df_screener.empty:
+    bullish_df = df_screener[df_screener["السيولة"] == "🟢 شراء حقيقي"]
+    st.subheader("🔥 العملات المرتفعة الآن (تحديث حي)")
+    st.dataframe(bullish_df.head(15), column_config={"رابط الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح")}, hide_index=True, use_container_width=True)
+else:
+    st.info("جاري التحديث وجلب البيانات...")
