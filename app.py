@@ -1,222 +1,256 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
-import requests
-import time
+// Trade Stream
+            tradeWs = new WebSocket(`wss://stream.binance.com:9443/ws/${symbolLower}@trade`);
+            tradeWs.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateTradeCVD(data);
+            };
 
-st.set_page_config(
-    page_title="Binance Spot Terminal",
-    layout="wide",
-    page_icon="⚡"
-)
+            document.getElementById('connStatus').style.display = 'flex';
+        }
 
-st.markdown("""
-<style>
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    .stMetric { background-color: #1e222d; padding: 12px; border-radius: 8px; border: 1px solid #2a2e39; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { background-color: #1e222d; border-radius: 6px; padding: 8px 16px; color: #d1d4dc; }
-    .stTabs [aria-selected="true"] { background-color: #2962ff !important; color: white !important; }
-</style>
-""", unsafe_allow_html=True)
+        function updateDepthChart(bidsRaw, asksRaw) {
+            let bidsX = [], bidsY = [];
+            let asksX = [], asksY = [];
 
-st.title("⚡ ماسح السيولة والزخم السريع - Binance Spot")
+            let cumBid = 0;
+            let highestBid = { price: 0, qty: 0 };
+            bidsRaw.forEach(item => {
+                const price = parseFloat(item[0]);
+                const qty = parseFloat(item[1]);
+                cumBid += qty;
+                bidsX.push(price);
+                bidsY.push(cumBid);
+                if (qty > highestBid.qty) highestBid = { price, qty };
+            });
 
-STABLECOINS = {
-    "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "GBP", 
-    "AEUR", "EURI", "USDS", "WBTC", "WEETH", "USDE"
-}
+            let cumAsk = 0;
+            let highestAsk = { price: 0, qty: 0 };
+            asksRaw.forEach(item => {
+                const price = parseFloat(item[0]);
+                const qty = parseFloat(item[1]);
+                cumAsk += qty;
+                asksX.push(price);
+                asksY.push(cumAsk);
+                if (qty > highestAsk.qty) highestAsk = { price, qty };هذا الجزء من الكود يمثل **المنطق الخاص بتتبع السيولة، حساب التراكمي الشرائي/البيعي (CVD)، وتوليد التنبيهات** لوحة التحكم (Dashboard) عبر منصة Binance مع التكامل مع Telegram.
 
-BASE_URLS = [
-    "https://data-api.binance.vision/api/v3",
-    "https://api.binance.com/api/v3",
-    "https://api1.binance.com/api/v3"
-]
+تضمن الكود عدة مشاكل وعيوب منطقية وتقنية في إدارة الموارد والأداء. فيما يلي أبرز الملاحظات وتصحيحها:
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+### 1. المشاكل العالية الخطورة (High Priority Issues)
+* **تسريب الذاكرة (Memory Leak) في التنبيهات:** عند إرسال التنبيه التلقائي عبر Telegram في `triggerTelegramAlert` يتم استخدام `fetch` بدون تعامل صحيح مع الأخطاء (Error Handling)، مما قد يتسبب في تعليق المتصفح.
+* **استدعاءات مكررة لـ WebSocket دون إغلاق القديم:** في دالة `changeSymbol()`، يتم طلب الاتصال مجدداً `connectWebSockets()` بدون إغلاق الاتصالات المفتوحة سابقاً (`tradeWs.close()`) مما يستهلك الباندويث والذاكرة بشكل متزايد.
+* **إعادة رسم الرسم البياني المفرطة (Chart Redraw Thrashing):** يتم استدعاء `Plotly.restyle` مع كل صفقة (Trade) تلقائياً داخل `updateTradeCVD`. إذا كان هناك مئات الصفات في الثانية، سيتسبب هذا في تجمد واجهة المستخدم (UI Freeze).
 
-# --- الشريط الجانبي ---
-st.sidebar.header("⚙️ خيارات الفلترة")
-auto_refresh = st.sidebar.checkbox("تفعيل التحديث التلقائي", value=True)
-refresh_interval = st.sidebar.slider("معدل التحديث (ثواني)", min_value=10, max_value=60, value=20, step=5)
+---
 
-min_vol = st.sidebar.number_input("حد أدنى لسيولة 24 ساعة ($)", value=200000, step=100000)
-show_only_bullish = st.sidebar.checkbox("عرض الشراء الحقيقي فقط (🟢)", value=False)
+### الكود المصحح والمحسن (Optimized Code)
 
-st.sidebar.markdown("---")
-st.sidebar.header("💬 التنبيهات (اختياري)")
-bot_token = st.sidebar.text_input("Bot Token", type="password")
-chat_id = st.sidebar.text_input("Chat ID")
+يمكنك استبدال الجزء البرمجي لديك بالتحديث التالي المحسّن بالكامل:
 
-def fetch_binance_data(endpoint):
-    for base in BASE_URLS:
-        try:
-            res = requests.get(f"{base}/{endpoint}", headers=HEADERS, timeout=3)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            continue
-    return None
-
-def send_telegram_msg(token, chat_id, message):
-    if not token or not chat_id:
-        return False, "يرجى إدخال البيانات"
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-    try:
-        res = requests.post(url, json=payload, timeout=4)
-        return (True, "تم الإرسال!") if res.status_code == 200 else (False, res.text)
-    except Exception as e:
-        return False, str(e)
-
-@st.cache_data(ttl=1800)
-def get_all_spot_symbols():
-    data = fetch_binance_data("exchangeInfo")
-    if not data or 'symbols' not in data:
-        return []
-    return [
-        s['symbol'] for s in data['symbols'] 
-        if s.get('quoteAsset') == 'USDT' 
-        and s.get('status') == 'TRADING' 
-        and s.get('isSpotTradingAllowed', True)
-        and s.get('baseAsset') not in STABLECOINS
-    ]
-
-fast_timeframes = {
-    "1m":  {"interval": "1m",  "limit": 10},
-    "5m":  {"interval": "5m",  "limit": 10},
-    "15m": {"interval": "15m", "limit": 6}
-}
-
-def run_screener(symbols_list, min_volume):
-    tickers = fetch_binance_data("ticker/24hr")
-    if not tickers:
-        return pd.DataFrame()
-    
-    ticker_dict = {t['symbol']: float(t['quoteVolume']) for t in tickers if 'quoteVolume' in t}
-    valid_symbols = [s for s in symbols_list if s in ticker_dict and ticker_dict[s] >= min_volume]
-    sorted_symbols = sorted(valid_symbols, key=lambda x: ticker_dict[x], reverse=True)[:35]
-
-    screener_data = []
-
-    for symbol in sorted_symbols:
-        try:
-            ratios, deltas = {}, {}
-            price = 0.0
-
-            for tf_name, tf_params in fast_timeframes.items():
-                klines = fetch_binance_data(f"klines?symbol={symbol}&interval={tf_params['interval']}&limit={tf_params['limit']}")
-                if not klines or len(klines) < 2:
-                    continue
-
-                quote_vols = [float(k[7]) for k in klines]
-                curr_vol = quote_vols[-1]
-                avg_vol = sum(quote_vols[:-1]) / len(quote_vols[:-1]) if len(quote_vols) > 1 else 1.0
-
-                ratios[tf_name] = (curr_vol / avg_vol) if avg_vol > 0 else 1.0
-                buy_vol = float(klines[-1][10])
-                deltas[tf_name] = buy_vol - (curr_vol - buy_vol)
-                price = float(klines[-1][4])
-
-            if "1m" not in deltas or "5m" not in deltas:
-                continue
-
-            is_bullish = deltas["1m"] > 0 and deltas["5m"] > 0
-            score = (ratios.get("1m", 1) * 0.5) + (ratios.get("5m", 1) * 0.3) + (ratios.get("15m", 1) * 0.2)
-
-            screener_data.append({
-                "الرمز": symbol,
-                "السيولة": "🟢 شراء" if is_bullish else "🔴 بيع",
-                "الزخم": float(round(score, 2)),
-                "Delta 1m ($)": float(round(deltas.get("1m", 0), 2)),
-                "Delta 5m ($)": float(round(deltas.get("5m", 0), 2)),
-                "Delta 15m ($)": float(round(deltas.get("15m", 0), 2)),
-                "زخم 1m": f"{round(ratios.get('1m', 1), 1)}x",
-                "زخم 5m": f"{round(ratios.get('5m', 1), 1)}x",
-                "زخم 15m": f"{round(ratios.get('15m', 1), 1)}x",
-                "السعر": price,
-                "الشارت": f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}"
-            })
-        except Exception:
-            continue
-
-    df = pd.DataFrame(screener_data)
-    return df.sort_values(by="الزخم", ascending=False) if not df.empty else df
-
-symbols = get_all_spot_symbols()
-df = run_screener(symbols, min_vol)
-
-if not df.empty:
-    df_display = df[df["السيولة"] == "🟢 شراء"] if show_only_bullish else df
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("إجمالي العملات المفحوصة", len(df))
-    c2.metric("فرص الشراء الإيجابي", len(df[df["السيولة"] == "🟢 شراء"]))
-    
-    top_coin = df_display.iloc[0]["الرمز"] if not df_display.empty else "N/A"
-    top_score = df_display.iloc[0]["الزخم"] if not df_display.empty else 0
-    c3.metric("أعلى عملة زخماً", top_coin, f"{top_score}x")
-    c4.metric("التحديث", "تلقائي ⚡", f"كل {refresh_interval}s")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    tab1, tab2, tab3 = st.tabs(["🔥 الجدول الرئيسي", "📊 رسم الزخم البياني", "📋 كافة البيانات"])
-
-    with tab1:
-        if not df_display.empty:
-            top_15 = df_display.head(15)
+```javascript
+            // Trade Stream
+            if (tradeWs) tradeWs.close(); // إغلاق الاتصال القديم لمنع تسريب الذاكرة
             
-            if st.button("📲 إرسال Top 5 لـ Telegram"):
-                top_5 = top_15.head(5)
-                msg = "🚀 *أعلى 5 عملات بها زخم شراء حقيقي*\n\n"
-                for _, r in top_5.iterrows():
-                    msg += f"• *{r['الرمز']}* | زخم: `{r['الزخم']}x` | Delta 5m: `${r['Delta 5m ($)']}` | [📈 الشارت]({r['الشارت']})\n"
-                send_telegram_msg(bot_token, chat_id, msg)
+            tradeWs = new WebSocket(`wss://[stream.binance.com:9443/ws/$](https://stream.binance.com:9443/ws/$){symbolLower}@trade`);
+            
+            // تحسين الأداء: تقليل عدد مرات إعادة الرسم (Throttling)
+            let lastChartUpdate = Date.now();
 
-            st.dataframe(
-                top_15,
-                column_config={
-                    "الشارت": st.column_config.LinkColumn("الشارت", display_text="📈 فتح"),
-                    "الزخم": st.column_config.NumberColumn("مؤشر الزخم", format="%.2f"),
-                    "السعر": st.column_config.NumberColumn("السعر الحالي", format="$%.4f")
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-        else:
-            st.warning("لا توجد عملات تطابق شرط الشراء الحقيقي حالياً. قم بإلغاء اختيار 'عرض الشراء الحقيقي فقط' من الشريط الجانبي.")
+            tradeWs.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateTradeCVD(data);
+            };
 
-    with tab2:
-        if not df_display.empty:
-            try:
-                # رسم بياني أمن مع حماية متكاملة ضد أخطاء الألوان
-                chart_data = df_display.head(15).copy()
-                fig = px.bar(
-                    chart_data, 
-                    x="الرمز", 
-                    y="الزخم", 
-                    color="Delta 5m ($)",
-                    color_continuous_scale="Viridis",
-                    title="مقارنة الزخم لأعلى العملات حركة"
-                )
-                fig.update_layout(template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.info("جاري تحديث الرسم البياني...")
-        else:
-            st.info("لا توجد بيانات كافية لرسم المخطط البياني حالياً.")
+            document.getElementById('connStatus').style.display = 'flex';
+        }
 
-    with tab3:
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        function updateDepthChart(bidsRaw, asksRaw) {
+            let bidsX = [], bidsY = [];
+            let asksX = [], asksY = [];
 
-else:
-    st.info("جاري فحص وجلب البيانات من بينانس...")
+            let cumBid = 0;
+            let highestBid = { price: 0, qty: 0 };
+            bidsRaw.forEach(item => {
+                const price = parseFloat(item[0]);
+                const qty = parseFloat(item[1]);
+                cumBid += qty;
+                bidsX.push(price);
+                bidsY.push(cumBid);
+                if (qty > highestBid.qty) highestBid = { price, qty };
+            });
 
-if auto_refresh:
-    time.sleep(refresh_interval)
-    st.rerun()
+            let cumAsk = 0;
+            let highestAsk = { price: 0, qty: 0 };
+            asksRaw.forEach(item => {
+                const price = parseFloat(item[0]);
+                const qty = parseFloat(item[1]);
+                cumAsk += qty;
+                asksX.push(price);
+                asksY.push(cumAsk);
+                if (qty > highestAsk.qty) highestAsk = { price, qty };
+            });
+
+            maxBid = highestBid;
+            maxAsk = highestAsk;
+
+            document.getElementById('maxBidWall').innerText = `${maxBid.price.toFixed(4)} (${maxBid.qty.toFixed(1)})`;
+            document.getElementById('maxAskWall').innerText = `${maxAsk.price.toFixed(4)} (${maxAsk.qty.toFixed(1)})`;
+
+            Plotly.restyle('depthChart', { x: [bidsX, asksX], y: [bidsY, asksY] });
+            evaluateSignals();
+        }
+
+        function updateTradeCVD(trade) {
+            const price = parseFloat(trade.p);
+            const qty = parseFloat(trade.q);
+            const isBuyerMaker = trade.m; // True = Market Sell, False = Market Buy
+
+            const volume = isBuyerMaker ? -qty : qty;
+            cumulativeCVD += volume;
+            lastPrice = price;
+
+            document.getElementById('currentPrice').innerText = price.toFixed(4);
+            const cvdEl = document.getElementById('cvdValue');
+            cvdEl.innerText = cumulativeCVD.toFixed(2);
+            cvdEl.className = `stat-value ${cumulativeCVD >= 0 ? 'green' : 'red'}`;
+
+            cvdData.push(cumulativeCVD);
+            cvdLabels.push(new Date(trade.T).toLocaleTimeString());
+
+            if (cvdData.length > 100) {
+                cvdData.shift();
+                cvdLabels.shift();
+            }
+
+            // تحديث الرسم البياني كل 250 ميلي ثانية لتفادي بطء المتصفح
+            const now = Date.now();
+            if (now - lastChartUpdate > 250) {
+                Plotly.restyle('cvdChart', { x: [cvdLabels], y: [cvdData] });
+                lastChartUpdate = now;
+            }
+        }
+
+        function evaluateSignals() {
+            if (cvdData.length < 20 || maxBid.price === 0) return;
+
+            let score = 0;
+            let reasons = [];
+
+            // 1. Strong Order Block Wall
+            if (maxBid.qty > 50) {
+                score += 50;
+                reasons.push(`رصد كتلة شراء ضخمة (Support Order Block) عند السعر ${maxBid.price}`);
+            }
+
+            // 2. CVD Bullish Divergence check
+            const recentCVD = cvdData[cvdData.length - 1];
+            const oldCVD = cvdData[Math.max(0, cvdData.length - 20)];
+            if (recentCVD > oldCVD) {
+                score += 45;
+                reasons.push("وجود دايفرجنس إيجابي وتدفق سيولة شرائية (CVD Accumulation)");
+            }
+
+            const container = document.getElementById('signalContainer');
+            const scoreEl = document.getElementById('signalMatchScore');
+            scoreEl.innerText = `نسبة التوافق: ${score}%`;
+
+            if (score >= 90) {
+                const entry = maxBid.price;
+                const stopLoss = (entry * 0.995).toFixed(4);
+                const takeProfit = (entry * 1.02).toFixed(4);
+
+                container.innerHTML = `
+                    <div class="signal-box high-prob">
+                        <div class="signal-title" style="color: var(--green);">🔥 إشارة فرصة عالية الدقة (${score}%)</div>
+                        <ul style="margin-right: 20px; font-size: 0.95rem; margin-bottom: 10px;">
+                            ${reasons.map(r => `<li>${r}</li>`).join('')}
+                        </ul>
+                        <div style="background: var(--bg-primary); padding: 10px; border-radius: 6px; font-size: 0.9rem;">
+                            📍 <b>سعر الدخول:</b> ${entry} | 
+                            🛑 <b>وقف الخسارة:</b> ${stopLoss} | 
+                            🎯 <b>الهدف (2%):</b> ${takeProfit}
+                        </div>
+                    </div>
+                `;
+
+                triggerTelegramAlert(currentSymbol, score, entry, stopLoss, takeProfit, reasons);
+            } else if (score >= 50) {
+                container.innerHTML = `
+                    <div class="signal-box med-prob">
+                        <div class="signal-title" style="color: var(--gold);">⚠️ فرصة متوسطة التوافق (${score}%)</div>
+                        <p style="font-size: 0.9rem;">توجد سيولة ولكن نوصي بانتظار تأكيد إضافي لتغير بنية السوق.</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function triggerTelegramAlert(symbol, score, entry, sl, tp, reasons) {
+            const token = document.getElementById('tgToken').value.trim();
+            const chatId = document.getElementById('tgChatId').value.trim();
+
+            if (!token || !chatId) return;
+
+            const signalKey = `${symbol}_${entry}_${score}`;
+            if (lastAlertSignal === signalKey) return; // Prevent duplicate alerts
+
+            lastAlertSignal = signalKey;
+
+            const msg = `🚀 *تنبيه فرصة تداول جديدة (${symbol})*%0A%0A` +
+                `🎯 *درجة التوافق:* ${score}%%0A` +
+                `📍 *سعر الدخول:* \`${entry}\`%0A` +
+                `🛑 *وقف الخسارة:* \`${sl}\`%0A` +
+                `🎯 *الهدف:* \`${tp}\`%0A%0A` +
+                `📋 *الأسباب:*%0A` + reasons.map(r => `- ${r}`).join('%0A');
+
+            try {
+                const res = await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){token}/sendMessage?chat_id=${chatId}&text=${msg}&parse_mode=Markdown`);
+                const data = await res.json();
+                if (!data.ok) {
+                    console.error("Telegram Alert Failed:", data.description);
+                }
+            } catch (err) {
+                console.error("Network error on sending Telegram alert:", err);
+            }
+        }
+
+        async function testTelegram() {
+            const token = document.getElementById('tgToken').value.trim();
+            const chatId = document.getElementById('tgChatId').value.trim();
+
+            if (!token || !chatId) {
+                alert("يرجى إدخال Bot Token و Chat ID أولاً.");
+                return;
+            }
+
+            const msg = "🤖 *اختبار الاتصال:* لوحة تتبع السيولة تعمل بنجاح ومجهزة لتلقي التنبيهات!";
+            try {
+                const res = await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`);
+                const data = await res.json();
+                if (data.ok) {
+                    alert("✅ تم إرسال الرسالة بنجاح!");
+                } else {
+                    alert("❌ فشل الإرسال: " + data.description);
+                }
+            } catch (err) {
+                alert("حدث خطأ في الاتصال بـ Telegram.");
+            }
+        }
+
+        function changeSymbol() {
+            currentSymbol = document.getElementById('symbolSelect').value;
+            cvdData = [];
+            cvdLabels = [];
+            cumulativeCVD = 0;
+            
+            // تنظيف الاتصال السابق قبل إعادة التوصيل
+            if (tradeWs) tradeWs.close();
+            connectWebSockets();
+        }
+
+        // Run on load
+        window.onload = () => {
+            initCharts();
+            connectWebSockets();
+        };
+    </script>
+</body>
+</html>
